@@ -1,0 +1,164 @@
+# ============================================================
+# PHM Foundation Model — Master Configuration
+# ============================================================
+# Self-supervised masked autoencoder with frequency-conditioned
+# normalization for multi-domain fault diagnosis & prognosis.
+# ============================================================
+
+seed: 42
+
+# --- Data Pipeline ---
+data:
+  target_sample_rate: 25600       # Resample all time-domain signals to this rate (Hz)
+  window_length: 2560             # Samples per window at target rate (= 0.1s at 25.6kHz)
+  cmapss_window_length: 50        # Cycles for CMAPSS (cycle-based, no resampling)
+  stride_divisor: 2               # stride = window_length / stride_divisor
+  hdf5_dir: "data/"               # Directory for per-dataset HDF5 files
+  combined_hdf5: "data/phm_combined.h5"
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+# --- Dataset Definitions ---
+# Each dataset is loaded via the phmd library and preprocessed into
+# a common windowed format. Datasets span 5 distinct industrial
+# domains with sampling frequencies from 1 Hz to ~200 kHz.
+datasets:
+  - name: "CWRU"
+    phmd_name: "CWRU"
+    domain: "rotating_machinery"
+    original_sampling_freq: 12000.0
+    num_channels: 1
+    signal_columns: ["DE"]
+    tasks:
+      - type: "classification"
+        task_name: "fault"
+        num_classes: 4
+
+  - name: "PRONOSTIA"
+    phmd_name: "PRONOSTIA"
+    domain: "bearing_degradation"
+    original_sampling_freq: 25600.0
+    num_channels: 2
+    signal_columns: ["V_acc", "H_acc"]
+    tasks:
+      - type: "regression"
+        task_name: "rul"
+
+  - name: "CMAPSS"
+    phmd_name: "CMAPSS"
+    domain: "turbofan_engine"
+    original_sampling_freq: 1.0
+    num_channels: 14
+    is_cycle_based: true
+    signal_columns: ["T2", "T24", "T30", "T50", "P2", "P15", "P30", "Nf", "Nc", "Ps30", "phi", "NRf", "NRc", "BPR"]
+    tasks:
+      - type: "regression"
+        task_name: "rul"
+
+  - name: "MFPT"
+    phmd_name: "MFPT"
+    domain: "rotating_machinery"
+    original_sampling_freq: 97656.0
+    num_channels: 1
+    signal_columns: ["vibration"]
+    tasks:
+      - type: "classification"
+        task_name: "fault"
+        num_classes: 2
+
+  - name: "UOC18"
+    phmd_name: "UOC18"
+    domain: "gear_fault"
+    original_sampling_freq: 20000.0
+    num_channels: 1
+    signal_columns: ["acc"]
+    tasks:
+      - type: "classification"
+        task_name: "fault"
+        num_classes: 9
+
+# --- Self-Supervised Pre-Training (Masked Autoencoder) ---
+# The encoder is trained to reconstruct randomly masked patches.
+# No labels are used during pre-training — the model learns general
+# signal structure from raw waveforms across all domains jointly.
+pretrain:
+  mask_ratio: 0.4                 # Fraction of patches to mask (0.4 = 40%)
+  decoder_d_model: 64             # Decoder hidden dimension (lightweight)
+  decoder_num_heads: 4            # Decoder attention heads
+  decoder_num_layers: 2           # Decoder Transformer layers
+  decoder_dim_feedforward: 128    # Decoder FFN intermediate dim
+  epochs: 200                     # Pre-training epochs (more for true MAE convergence)
+  batch_size: 128                 # Batch size
+  lr: 0.0001                      # AdamW learning rate (lower for stable MAE training)
+  weight_decay: 0.01              # AdamW weight decay
+  patience: 30                    # Early stopping patience (more patience for true MAE)
+  warmup_epochs: 10               # Linear LR warmup epochs
+  use_mixed_precision: true       # FP16 on CUDA
+  grad_clip: 1.0                  # Gradient clipping max norm
+
+# --- Foundation Model Encoder (Transformer Backbone) ---
+# Shared encoder used for both pre-training and fine-tuning.
+# Uses frequency-conditioned layer normalization (FreqCondNorm)
+# to handle heterogeneous sampling rates across domains.
+foundation:
+  d_model: 128                    # Transformer hidden dimension
+  patch_size: 64                  # Time-steps per patch
+  patch_stride: 32                # Stride between consecutive patches
+  num_heads: 8                    # Attention heads
+  num_layers: 4                   # Transformer encoder layers
+  dim_feedforward: 256            # FFN intermediate dimension
+  dropout: 0.1                    # Dropout rate
+  activation: "gelu"              # FFN activation
+  freq_dim: 32                    # FreqCondNorm MLP hidden dimension
+  dataset_embed_dim: 32           # Dataset ID embedding dimension
+  latent_dim: 128                 # Output latent dimension (after projector)
+
+# --- RUL Configuration ---
+rul:
+  max_rul_clip: 125               # Piece-wise linear clipping (CMAPSS convention)
+  normalize: true                 # Min-max normalize RUL to [0, 1]
+
+# --- Baseline CNN ---
+# Per-dataset 1D CNN trained independently on each domain.
+# Serves as the "train from scratch" comparison baseline.
+baseline:
+  num_blocks: 5
+  channels: [32, 64, 128, 128, 64]
+  kernel_size: 7
+  dropout: 0.3
+  epochs: 40
+  batch_size: 64
+  lr: 0.001
+  weight_decay: 0.0001
+  patience: 8
+
+# --- Fine-Tuning (3-Stage Transfer Learning) ---
+# Stage 1: Freeze encoder backbone, train task heads only
+# Stage 2: Partial unfreeze (last 2 layers + embeddings + projector)
+# Stage 3: Full fine-tune with low learning rate
+finetune:
+  freeze_epochs: 15               # More epochs since projector also trains in Stage 1
+  partial_epochs: 20
+  full_epochs: 30
+  lr_head: 0.001
+  lr_backbone: 0.00005
+  patience: 10
+
+# --- Few-Shot Evaluation ---
+# Train with limited labeled data to measure representation quality.
+# Multiple seeds for statistical significance.
+few_shot:
+  fractions: [0.01, 0.05, 0.1, 0.5, 1.0]
+  num_seeds: 3
+  finetune_epochs: 30
+  lr: 0.0005
+  patience: 8
+
+# --- Ablation Studies ---
+ablation:
+  window_lengths: [1280, 2560, 5120]
+  low_data_fractions: [0.1, 0.2, 0.5, 1.0]
+  patch_sizes: [32, 64, 128]
+  num_layers_sweep: [2, 4, 6]
+  mask_ratios: [0.15, 0.3, 0.4, 0.5, 0.6, 0.75]

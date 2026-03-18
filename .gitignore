@@ -1,0 +1,46 @@
+# Data (too large for git)
+data/*.h5
+data/*.hdf5
+
+# Checkpoints
+checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environment
+.env
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.vrb
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+
+# SLURM logs
+slurm-*.out
+
+# Claude internal
+.claude/
